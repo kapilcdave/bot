@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+whale_monitor.log
+predictions_vs_market.csv
+.env
+private_key.pem
