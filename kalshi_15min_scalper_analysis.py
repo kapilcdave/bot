@@ -35,20 +35,29 @@ Dependencies:
 from __future__ import annotations
 
 import math
+import os
 import sys
+import tempfile
 import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-import seaborn as sns
 from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util.retry import Retry
+
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "matplotlib"))
+
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+except ModuleNotFoundError:
+    plt = None
+    sns = None
 
 
 # ============================================================================
@@ -272,18 +281,16 @@ def fetch_markets(
     """
     Fetch recent markets for one series ticker.
 
-    The user specified /markets?series_ticker=XXX&status=all&limit=200. Kalshi's
-    current docs accept a single status value or no status filter. To stay
-    compatible, this implementation omits status and then falls back to the
-    historical /historical/markets endpoint if needed.
+    Kalshi's current /markets endpoint accepts `series_ticker` plus either a
+    single concrete `status` value or no status filter. `status=all` is not a
+    valid value, and `/historical/markets` does not support `series_ticker`,
+    so this fetcher sticks to valid `/markets` queries only.
     """
     collected: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     endpoint_variants = [
-        (f"{BASE_URL}/markets", {"status": "all"}),
+        (f"{BASE_URL}/markets", {"status": "settled"}),
         (f"{BASE_URL}/markets", {}),
-        (f"{BASE_URL}/historical/markets", {"status": "all"}),
-        (f"{BASE_URL}/historical/markets", {}),
     ]
 
     for endpoint, extra_params in endpoint_variants:
@@ -310,9 +317,6 @@ def fetch_markets(
 
             markets = payload.get("markets") or []
             if not isinstance(markets, list):
-                break
-
-            if not markets and endpoint.endswith("/historical/markets"):
                 break
 
             local_rows.extend(markets)
@@ -872,6 +876,9 @@ def generate_chart(all_summaries: pd.DataFrame) -> Optional[str]:
     Save a simple bar chart for BTC/ETH win rates across time windows at the
     chosen threshold.
     """
+    if plt is None or sns is None:
+        return None
+
     if all_summaries.empty:
         return None
 
@@ -1057,6 +1064,8 @@ def main() -> None:
     chart_path = generate_chart(all_summary_df)
     if chart_path:
         print(f"\nSaved chart: {chart_path}")
+    elif plt is None or sns is None:
+        print("\nSkipped chart generation because matplotlib/seaborn are not installed.")
 
     print("\n# Overall Ranking\n")
     display_cols = [
