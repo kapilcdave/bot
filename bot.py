@@ -90,7 +90,7 @@ def env_bool(name: str, default: bool) -> bool:
 @dataclass
 class BotConfig:
     mode: str = os.getenv("KALSHI_MODE", "paper").strip().lower()
-    environment: str = os.getenv("KALSHI_ENV", "demo").strip().lower()
+    environment: str = os.getenv("KALSHI_ENV", "prod").strip().lower()
     base_url: str = os.getenv("KALSHI_BASE_URL", "")
     api_key_id: str = os.getenv("KALSHI_API_KEY_ID", "")
     private_key_path: str = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
