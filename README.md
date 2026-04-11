@@ -63,7 +63,7 @@ Optional settings:
 ```bash
 export KALSHI_MODE=paper
 export KALSHI_ENV=prod
-export KALSHI_SERIES=KXBTC15M,KXETH15M,KXSOL15M
+export KALSHI_SERIES=KXBTC15M
 export KALSHI_SCAN_INTERVAL_SECONDS=5
 export KALSHI_MIN_MINUTES_TO_CLOSE=1
 export KALSHI_MAX_MINUTES_TO_CLOSE=5
@@ -123,6 +123,12 @@ The automation path should not depend on:
 - assumptions that every detected favorite is still tradeable
 
 Instead, `bot.py` makes decisions from the current book and only trades when the book can support the intended entry.
+
+## Default Universe
+
+The bot now defaults to:
+
+- `KXBTC15M`
 
 ## Remaining Gaps
 

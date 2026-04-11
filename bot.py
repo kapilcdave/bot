@@ -32,12 +32,6 @@ DEFAULT_BASE_URLS = {
 
 DEFAULT_CRYPTO_SERIES = [
     "KXBTC15M",
-    "KXETH15M",
-    "KXSOL15M",
-    "KXXRP15M",
-    "KXBNB15M",
-    "KXDOGE15M",
-    "KXHYPE15M",
 ]
 
 
