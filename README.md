@@ -4,6 +4,7 @@ This repo now has two separate tools:
 
 - `kalshi_15min_scalper_analysis.py`: historical analysis and reporting
 - `bot.py`: a safer real-time scalping bot framework for paper or live trading
+- `reverse_engineer.py`: a screenshot-driven scaffold for modeling a dual-sided "incremental pair" bot console
 
 ## What Changed
 
@@ -114,6 +115,12 @@ Continuous live trading against production:
 KALSHI_MODE=live KALSHI_ENV=prod python bot.py
 ```
 
+Render the reverse-engineered dashboard samples:
+
+```bash
+python reverse_engineer.py --sample both
+```
+
 ## Why This Is Better Than The Old Script
 
 The automation path should not depend on:
@@ -140,6 +147,26 @@ If you want this to be production-grade rather than just sane:
 - add emergency exits before expiry when the signal breaks
 - add post-trade analytics from real fills, not just settlement outcomes
 - add alerting and kill switches
+
+## Reverse-Engineering Notes
+
+The screenshots you shared are not showing a simple directional bot. They imply a state machine closer to:
+
+- accumulate inventory on both sides
+- track the net payout if `YES` wins vs if `NO` wins
+- keep posting passive hedge orders while occasionally crossing the spread on the favored side
+- enter a `parity` or `profit lock` mode once both terminal outcomes are non-negative
+- halt trading once the book is hard-locked
+
+`reverse_engineer.py` models that state explicitly:
+
+- dual-sided inventory with average cost
+- pending GTC and batching orders
+- "if yes wins / if no wins" payout math
+- break-even deficit math
+- guard, parity, and hard-lock flags
+
+That file is a scaffold, not a live strategy. Its purpose is to make the screenshot's mechanics concrete enough that real exchange adapters, fill handlers, and signal logic can be added without guessing at the shape of the state.
 
 ## Reference
 
