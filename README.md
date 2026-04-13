@@ -1,10 +1,11 @@
-# Kalshi Crypto Expiry Scalper
+# Kalshi Crypto Hedge Bot
 
-This repo now has two separate tools:
+This repo now has three separate tools:
 
 - `kalshi_15min_scalper_analysis.py`: historical analysis and reporting
-- `bot.py`: a safer real-time scalping bot framework for paper or live trading
+- `bot.py`: a dual-sided Kalshi 15-minute crypto bot with a separate hedge engine
 - `reverse_engineer.py`: a screenshot-driven scaffold for modeling a dual-sided "incremental pair" bot console
+- `hedge_engine.py`: a Kalshi-oriented hedge decision engine for 15-minute crypto binaries
 
 ## What Changed
 
@@ -18,34 +19,32 @@ The replacement bot uses:
 - hard risk limits on per-trade and total exposure
 - `paper` mode by default
 
-## Strategy
+## Bot Strategy
 
-The bot is intentionally narrow:
+The live bot is intentionally narrow:
 
-- scans 15-minute crypto series only
-- looks for markets closing in the next 1 to 5 minutes
-- identifies the current favorite side from the orderbook
-- only buys the favorite when all of these hold:
-  - favorite ask is within the configured price band
-  - bid/ask spread is tight
-  - top-of-book bid support is large enough
-  - enough size exists to lift the ask
-  - open interest and volume clear minimum thresholds
+- scans Kalshi 15-minute crypto markets only
+- maintains YES and NO inventory independently
+- uses a simple GBM fair-value estimate to decide when one side is cheap enough to accumulate
+- allows both pair-building and side-pressing behavior
+- runs a separate hedge engine that decides when to buy insurance on the weak side
+- stops pressing once terminal PnL is locked on both outcomes
 
-This is still not guaranteed alpha. It is a disciplined execution framework around the "late favorite into expiry" idea, not proof that the idea is profitable.
+This is still not guaranteed alpha. It is a safer engineering scaffold for a two-sided Kalshi market-making and hedging workflow, not proof of profitability.
 
 ## Modes
 
 `paper` mode:
 
 - default
-- no authenticated trading calls
-- simulates entries and settlement PnL in memory
+- no authenticated order placement
+- simulates fills in memory from current ask prices
 
 `live` mode:
 
 - requires Kalshi API credentials
 - submits IOC limit buy orders through the authenticated portfolio order endpoint
+- requires `KALSHI_ALLOW_LIVE_TRADING=true`
 
 ## Setup
 
@@ -67,19 +66,15 @@ export KALSHI_ENV=prod
 export KALSHI_SERIES=KXBTC15M
 export KALSHI_SCAN_INTERVAL_SECONDS=5
 export KALSHI_MIN_MINUTES_TO_CLOSE=1
-export KALSHI_MAX_MINUTES_TO_CLOSE=5
-export KALSHI_TARGET_MINUTES_TO_CLOSE=3
-export KALSHI_MIN_FAVORITE_PRICE_CENTS=88
-export KALSHI_MAX_ENTRY_PRICE_CENTS=95
-export KALSHI_MAX_SPREAD_CENTS=2
-export KALSHI_MIN_BID_SUPPORT_CONTRACTS=20
-export KALSHI_MIN_ASK_LIQUIDITY_CONTRACTS=10
-export KALSHI_MIN_OPEN_INTEREST_CONTRACTS=50
-export KALSHI_MIN_VOLUME_CONTRACTS=100
-export KALSHI_CONTRACTS_PER_TRADE=10
-export KALSHI_MAX_CONCURRENT_POSITIONS=2
-export KALSHI_MAX_TRADE_NOTIONAL_DOLLARS=15
-export KALSHI_MAX_TOTAL_EXPOSURE_DOLLARS=30
+export KALSHI_MAX_MINUTES_TO_CLOSE=15
+export KALSHI_BASE_ORDER_SIZE=2
+export KALSHI_MAX_SIDE_SHARES=25
+export KALSHI_MAX_TOTAL_COST=60
+export KALSHI_FAIR_VALUE_EDGE_CENTS=4
+export KALSHI_PRESS_EDGE_CENTS=6
+export KALSHI_CHEAP_HEDGE_PRICE_CAP=0.25
+export KALSHI_INVENTORY_IMBALANCE_TRIGGER=2
+export KALSHI_PAPER_FILL_OFFSET_CENTS=0
 ```
 
 Live mode also needs:
@@ -87,6 +82,7 @@ Live mode also needs:
 ```bash
 export KALSHI_API_KEY_ID=your_key_id
 export KALSHI_PRIVATE_KEY_PATH=/absolute/path/to/private_key.pem
+export KALSHI_ALLOW_LIVE_TRADING=true
 ```
 
 ## Usage
@@ -125,11 +121,17 @@ python reverse_engineer.py --sample both
 
 The automation path should not depend on:
 
+- a single directional position model
+- hand-wavy hedge logic
 - historical candlestick proxies for executable prices
-- invalid `status=all` market queries
-- assumptions that every detected favorite is still tradeable
 
-Instead, `bot.py` makes decisions from the current book and only trades when the book can support the intended entry.
+Instead, `bot.py` now:
+
+- uses current open Kalshi markets
+- values both outcomes explicitly
+- keeps separate YES and NO inventory
+- runs a distinct hedge decision engine
+- defaults to paper mode
 
 ## Default Universe
 
@@ -167,6 +169,23 @@ The screenshots you shared are not showing a simple directional bot. They imply 
 - guard, parity, and hard-lock flags
 
 That file is a scaffold, not a live strategy. Its purpose is to make the screenshot's mechanics concrete enough that real exchange adapters, fill handlers, and signal logic can be added without guessing at the shape of the state.
+
+## Kalshi Hedge Engine
+
+You clarified that the real target is `Kalshi`, specifically US-accessible 15-minute crypto markets. The hedge logic is portable, but execution details are not. `hedge_engine.py` is therefore written as a Kalshi-side component:
+
+- inputs are current `YES` and `NO` prices from the Kalshi order book
+- time pressure is tied to seconds elapsed within a 15-minute market
+- hedge sizing is based on payout math for Kalshi binary contracts
+- the engine assumes an existing execution loop is responsible for IOC/FOK order submission and fill reconciliation
+
+The intended integration path is:
+
+1. `bot.py` or a new Kalshi market-maker loop maintains the live book and position state.
+2. That loop feeds `HedgeBook` and `HedgeInputs` into `HedgeEngine.decide(...)` every tick.
+3. If a hedge is approved, the execution layer places the corresponding Kalshi order and reconciles the fill before updating state.
+
+This keeps the hedge engine exchange-specific where it needs to be, without hardcoding API calls into the decision model itself.
 
 ## Reference
 
