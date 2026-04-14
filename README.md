@@ -6,6 +6,7 @@ This repo now has three separate tools:
 - `bot.py`: a dual-sided Kalshi 15-minute crypto bot with a separate hedge engine
 - `reverse_engineer.py`: a screenshot-driven scaffold for modeling a dual-sided "incremental pair" bot console
 - `hedge_engine.py`: a Kalshi-oriented hedge decision engine for 15-minute crypto binaries
+- `arb_scanner.py`: an exact-match Kalshi/Polymarket cross-exchange arbitrage scanner with a terminal UI
 
 ## What Changed
 
@@ -186,6 +187,31 @@ The intended integration path is:
 3. If a hedge is approved, the execution layer places the corresponding Kalshi order and reconciles the fill before updating state.
 
 This keeps the hedge engine exchange-specific where it needs to be, without hardcoding API calls into the decision model itself.
+
+## Cross-Exchange Arb Scanner
+
+`arb_scanner.py` is separate from the Kalshi hedge bot. It is a public-data scanner that:
+
+- uses exact market pair configuration from JSON
+- subscribes to Kalshi websocket ticker updates
+- subscribes to Polymarket market-channel updates by exact asset IDs
+- renders a terminal dashboard
+- flags opportunities when the best detected cross-venue spread is at least `10c` by default
+
+It currently scans only. Execution is stubbed on purpose.
+
+Example:
+
+```bash
+cp market_pairs.example.json market_pairs.json
+python arb_scanner.py --config market_pairs.json --arb-threshold-cents 10
+```
+
+Important:
+
+- no fuzzy matching is used anywhere in the scanner
+- you must manually verify that each Kalshi ticker and Polymarket asset pair refer to the same economic outcome
+- the scanner reports public-book opportunities, not guaranteed executable profit
 
 ## Reference
 

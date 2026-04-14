@@ -1,0 +1,9 @@
+[
+  {
+    "label": "BTC 15m exact match example",
+    "kalshi_ticker": "KXBTC15M-EXAMPLE",
+    "polymarket_yes_asset_id": "POLY_YES_ASSET_ID_HERE",
+    "polymarket_no_asset_id": "POLY_NO_ASSET_ID_HERE",
+    "notes": "Use exact, manually verified market pairs only. No fuzzy matching."
+  }
+]
