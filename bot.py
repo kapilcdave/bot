@@ -62,6 +62,7 @@ CHEAP_HEDGE_PRICE_CAP = float(os.getenv("KALSHI_CHEAP_HEDGE_PRICE_CAP", "0.25"))
 INVENTORY_IMBALANCE_TRIGGER = float(os.getenv("KALSHI_INVENTORY_IMBALANCE_TRIGGER", "2"))
 PAPER_FILL_OFFSET_CENTS = float(os.getenv("KALSHI_PAPER_FILL_OFFSET_CENTS", "0"))
 ALLOW_LIVE_TRADING = env_bool("KALSHI_ALLOW_LIVE_TRADING", False)
+STATE_PATH = os.getenv("KALSHI_STATE_PATH", "kalshi_bot_state.json")
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -252,6 +253,16 @@ class SideInventory:
         self.shares += shares
         self.total_cost += shares * price
 
+    def to_dict(self) -> dict[str, float]:
+        return {"shares": self.shares, "total_cost": self.total_cost}
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "SideInventory":
+        return cls(
+            shares=float(payload.get("shares", 0.0) or 0.0),
+            total_cost=float(payload.get("total_cost", 0.0) or 0.0),
+        )
+
 
 @dataclass
 class BookState:
@@ -311,6 +322,27 @@ class BookState:
             }
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ticker": self.ticker,
+            "market_open_ts": self.market_open_ts,
+            "yes": self.yes.to_dict(),
+            "no": self.no.to_dict(),
+            "trade_log": self.trade_log,
+            "session_pnl_locked": self.session_pnl_locked,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BookState":
+        return cls(
+            ticker=str(payload.get("ticker", "") or ""),
+            market_open_ts=float(payload.get("market_open_ts", 0.0) or 0.0),
+            yes=SideInventory.from_dict(payload.get("yes", {})),
+            no=SideInventory.from_dict(payload.get("no", {})),
+            trade_log=list(payload.get("trade_log", []) or []),
+            session_pnl_locked=float(payload.get("session_pnl_locked", 0.0) or 0.0),
+        )
+
 
 @dataclass(frozen=True)
 class MarketSnapshot:
@@ -332,6 +364,74 @@ class MarketSnapshot:
     @property
     def pair_ask_cost(self) -> float:
         return self.yes_ask + self.no_ask
+
+
+def get_live_positions(private_key) -> list[dict[str, Any]]:
+    payload = request_json("GET", "/portfolio/positions", private_key=private_key)
+    positions = payload.get("market_positions") or payload.get("positions") or []
+    return positions if isinstance(positions, list) else []
+
+
+def get_live_orders(private_key, ticker: str) -> list[dict[str, Any]]:
+    payload = request_json(
+        "GET",
+        "/portfolio/orders",
+        params={"ticker": ticker, "status": "open", "limit": 200},
+        private_key=private_key,
+    )
+    orders = payload.get("orders") or []
+    return orders if isinstance(orders, list) else []
+
+
+def _extract_side(payload: dict[str, Any]) -> Optional[str]:
+    side = payload.get("side")
+    if isinstance(side, str) and side.lower() in {"yes", "no"}:
+        return side.lower()
+    position = payload.get("position")
+    if isinstance(position, str) and position.lower() in {"yes", "no"}:
+        return position.lower()
+    return None
+
+
+def _extract_float(payload: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def rebuild_inventory_from_positions(positions: list[dict[str, Any]], ticker: str) -> tuple[SideInventory, SideInventory]:
+    yes = SideInventory()
+    no = SideInventory()
+    for position in positions:
+        if str(position.get("ticker", "")) != ticker:
+            continue
+        side = _extract_side(position)
+        if side not in {"yes", "no"}:
+            continue
+        shares = _extract_float(position, "quantity", "count", "position_count", "contracts")
+        avg_price = _extract_float(position, "average_price", "avg_price", "cost_basis", "price")
+        if shares <= 0:
+            continue
+        inventory = yes if side == "yes" else no
+        inventory.shares = shares
+        inventory.total_cost = shares * avg_price
+    return yes, no
+
+
+def summarize_open_orders(orders: list[dict[str, Any]]) -> dict[str, float]:
+    summary = {"yes": 0.0, "no": 0.0}
+    for order in orders:
+        side = _extract_side(order)
+        if side not in summary:
+            continue
+        summary[side] += _extract_float(order, "remaining_count", "quantity", "count")
+    return summary
 
 
 def paper_fill_price(side: str, snapshot: MarketSnapshot) -> float:
@@ -390,6 +490,43 @@ class DualSideKalshiBot:
         self.hedge_engine = HedgeEngine(HedgeConfig())
         self.hedge_state = HedgeState()
         self.book_state = BookState()
+        self.open_orders: list[dict[str, Any]] = []
+        self.load_state()
+
+    def load_state(self) -> None:
+        if not os.path.exists(STATE_PATH):
+            return
+        try:
+            with open(STATE_PATH, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, dict):
+                return
+            self.book_state = BookState.from_dict(payload.get("book_state", {}))
+            hedge_payload = payload.get("hedge_state", {})
+            self.hedge_state = HedgeState(
+                hedges_fired=int(hedge_payload.get("hedges_fired", 0) or 0),
+                budget_spent=float(hedge_payload.get("budget_spent", 0.0) or 0.0),
+                last_hedge_ts=float(hedge_payload.get("last_hedge_ts", -1e18) or -1e18),
+            )
+            open_orders = payload.get("open_orders", [])
+            self.open_orders = open_orders if isinstance(open_orders, list) else []
+            log.info("Loaded persisted state from %s", STATE_PATH)
+        except Exception as exc:
+            log.warning("State load failed: %s", exc)
+
+    def save_state(self) -> None:
+        payload = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "book_state": self.book_state.to_dict(),
+            "hedge_state": {
+                "hedges_fired": self.hedge_state.hedges_fired,
+                "budget_spent": self.hedge_state.budget_spent,
+                "last_hedge_ts": self.hedge_state.last_hedge_ts,
+            },
+            "open_orders": self.open_orders,
+        }
+        with open(STATE_PATH, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
 
     def build_snapshot(self, market: dict[str, Any], orderbook: dict[str, Any], spot_price: float) -> Optional[MarketSnapshot]:
         top = parse_top_levels(orderbook)
@@ -442,15 +579,47 @@ class DualSideKalshiBot:
             flow_decay=1.0,
         )
 
+    def reconcile_live_state(self) -> None:
+        if MODE != "live":
+            return
+        try:
+            positions = get_live_positions(self.private_key)
+            yes, no = rebuild_inventory_from_positions(positions, self.book_state.ticker)
+            self.book_state.yes = yes
+            self.book_state.no = no
+        except Exception as exc:
+            log.warning("Position reconciliation failed: %s", exc)
+        try:
+            self.open_orders = get_live_orders(self.private_key, self.book_state.ticker)
+        except Exception as exc:
+            log.warning("Open-order fetch failed: %s", exc)
+
     def execute_buy(self, side: str, shares: float, price: float, reason: str) -> bool:
         now_ts = time.time()
         if MODE == "paper":
             self.book_state.apply_fill(side, shares, price, reason, now_ts)
+            self.open_orders = []
+            self.save_state()
             log.info("PAPER FILL %s %.1f @ %.2f | %s", side.upper(), shares, price, reason)
             return True
 
         response = place_live_buy_order(self.private_key, self.book_state.ticker, side, shares, price)
-        self.book_state.apply_fill(side, shares, price, reason, now_ts)
+        order = response.get("order", response)
+        if isinstance(order, dict):
+            self.open_orders.append(order)
+        self.reconcile_live_state()
+        self.book_state.trade_log.append(
+            {
+                "ts": now_ts,
+                "ticker": self.book_state.ticker,
+                "side": side,
+                "shares_requested": shares,
+                "price_requested": price,
+                "reason": reason,
+                "live_response": response,
+            }
+        )
+        self.save_state()
         log.info("LIVE ORDER %s %.1f @ %.2f | %s | %s", side.upper(), shares, price, reason, json.dumps(response))
         return True
 
@@ -495,6 +664,7 @@ class DualSideKalshiBot:
         )
 
     def log_console(self, snapshot: MarketSnapshot) -> None:
+        open_order_summary = summarize_open_orders(self.open_orders)
         lines = [
             "=" * 72,
             f"Market {snapshot.ticker} | mode={MODE} env={ENV} series={SERIES_TICKER}",
@@ -515,10 +685,19 @@ class DualSideKalshiBot:
             ),
             (
                 f"Hedge budget={fmt_money(self.hedge_engine.config.hedge_budget_dollars - self.hedge_state.budget_spent)} "
-                f"hedges_fired={self.hedge_state.hedges_fired}"
+                f"hedges_fired={self.hedge_state.hedges_fired} open_orders={len(self.open_orders)}"
             ),
-            "=" * 72,
+            (
+                f"Open Order Shares YES={open_order_summary['yes']:.1f} "
+                f"NO={open_order_summary['no']:.1f}"
+            ),
+        "=" * 72,
         ]
+        if MODE == "live":
+            lines.insert(
+                6,
+                "Live inventory is reconciled from Kalshi positions; avg cost depends on portfolio payload fidelity.",
+            )
         log.info("\n%s", "\n".join(lines))
 
     def run_once(self) -> bool:
@@ -527,6 +706,7 @@ class DualSideKalshiBot:
             log.info("No active Kalshi 15-minute market matched the filters.")
             return False
         self.book_state.reset_for_market(market["ticker"], market["_open_time"].timestamp())
+        self.reconcile_live_state()
         spot = get_btc_price()
         if spot is None:
             return False
@@ -540,6 +720,7 @@ class DualSideKalshiBot:
         self.maybe_accumulate(snapshot)
         self.maybe_hedge(snapshot)
         self.log_console(snapshot)
+        self.save_state()
         return True
 
     def run_forever(self) -> None:
@@ -548,10 +729,12 @@ class DualSideKalshiBot:
                 self.run_once()
                 time.sleep(SCAN_INTERVAL_SECONDS)
             except KeyboardInterrupt:
+                self.save_state()
                 self.save_trade_log()
                 raise
             except Exception as exc:
                 log.exception("Loop error: %s", exc)
+                self.save_state()
                 time.sleep(max(2.0, SCAN_INTERVAL_SECONDS))
 
     def save_trade_log(self) -> None:
