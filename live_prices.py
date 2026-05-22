@@ -23,8 +23,7 @@ def get_active_tickers():
     return ["KXBTC-25MAR15-B100000"]
 
 async def watch_prices():
-    tickers = get_active_tickers()
-    print(f"Watching live prices for: {', '.join(tickers)}")
+    print("Connecting to Kalshi live feed...")
     
     path = "/trade-api/ws/v2"
     headers = get_auth_headers(API_KEY_ID, PRIVATE_KEY_PATH, "GET", path)
@@ -34,12 +33,11 @@ async def watch_prices():
             "id": 1,
             "cmd": "subscribe",
             "params": {
-                "channels": ["ticker", "orderbook_delta"],
-                "market_tickers": tickers
+                "channels": ["ticker"]
             }
         }
         await ws.send(json.dumps(subscribe_msg))
-        print(f"Subscribed to {len(tickers)} markets...")
+        print("Subscribed to global ticker feed. Waiting for ticks...")
 
         try:
             async for message in ws:
@@ -47,26 +45,20 @@ async def watch_prices():
                 msg_type = data.get("type")
                 
                 if msg_type == "subscribed":
-                    print(f"Subscription confirmed for {data.get('msg', {}).get('channel')}")
+                    print("Subscription confirmed.")
                     continue
                 
-                if msg_type in ["ticker", "orderbook_delta"]:
+                if msg_type == "ticker":
                     ticker_data = data.get("msg", {})
                     t = ticker_data.get("market_ticker")
+                    yes_price = ticker_data.get("yes_ask", "N/A")
+                    no_price = ticker_data.get("no_ask", "N/A")
                     
-                    if msg_type == "ticker":
-                        yes_price = ticker_data.get("yes_ask", "N/A")
-                        no_price = ticker_data.get("no_ask", "N/A")
-                    else: # orderbook_delta
-                        yes_levels = ticker_data.get("yes", [])
-                        no_levels = ticker_data.get("no", [])
-                        yes_price = yes_levels[0][0] if yes_levels else "N/A"
-                        no_price = no_levels[0][0] if no_levels else "N/A"
-
-                    if yes_price != "N/A" or no_price != "N/A":
-                        print(f"[{t}] YES: {yes_price}c | NO: {no_price}c")
+                    print(f"[{t}] YES: {yes_price}c | NO: {no_price}c")
                 elif msg_type == "error":
                     print(f"Error: {data}")
+        except websockets.exceptions.ConnectionClosed:
+            print("Connection closed")
         except websockets.exceptions.ConnectionClosed:
             print("Connection closed")
 
